@@ -1,9 +1,10 @@
 package com.example.dms_backend.model;
 
 public enum TypeLitige {
-    FRAUDE,
-    PRODUIT_NON_RECU,
     MONTANT_INCORRECT,
-    DOUBLE_FACTURATION,
-    AUTRE
+    TRANSACTION_NON_AUTORISEE,
+    DUPLICATION,
+    FRAUDE_SUSPECTE,
+    PROBLEME_TECHNIQUE,
+    AUTRE    // ✅ Assurez-vous que ce type existe
 }

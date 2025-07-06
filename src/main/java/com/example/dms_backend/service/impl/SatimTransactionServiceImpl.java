@@ -38,7 +38,7 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
             reader.readLine(); // Ignore header
 
             while ((line = reader.readLine()) != null) {
-                if (line.trim().isEmpty()) continue; // Ignorer les lignes vides
+                if (line.trim().isEmpty()) continue;
 
                 SatimTransaction transaction = parseLineToTransaction(line);
                 if (transaction != null) {
@@ -53,36 +53,40 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
                 return;
             }
 
-            // 1. Sauvegarder les transactions SATIM
+            // 🔧 AMÉLIORATION: Import en 3 étapes avec meilleure gestion des liens
+
+            // 1️⃣ Sauvegarder d'abord toutes les SatimTransactions
             satimTransactionRepository.saveAll(satimTransactions);
             log.info("✅ {} SATIM transactions importées", satimTransactions.size());
 
-            // 2. Créer les transactions principales (si elles n'existent pas déjà)
-            List<Transaction> transactions = new ArrayList<>();
+            // 2️⃣ Créer/récupérer les Transactions principales avec gestion des doublons
+            List<Transaction> newTransactions = new ArrayList<>();
             for (SatimTransaction s : satimTransactions) {
-                if (!transactionRepository.existsByReference(s.getStrRecoCode())) {
-                    Transaction transaction = convertToTransaction(s);
-                    transactions.add(transaction);
+                Transaction transaction = getOrCreateTransaction(s);
+                if (transaction.getId() == null) { // Nouvelle transaction
+                    newTransactions.add(transaction);
                 }
             }
 
-            if (!transactions.isEmpty()) {
-                transactionRepository.saveAll(transactions);
-                log.info("✅ {} nouvelles Transactions créées", transactions.size());
+            if (!newTransactions.isEmpty()) {
+                transactionRepository.saveAll(newTransactions);
+                log.info("✅ {} nouvelles Transactions créées", newTransactions.size());
             }
 
-            // 3. Créer les méta-transactions avec le bon mapping
-            List<MetaTransaction> metaTransactions = new ArrayList<>();
+            // 3️⃣ Créer les MetaTransactions avec le bon mapping strCode
+            List<MetaTransaction> newMetaTransactions = new ArrayList<>();
+            int linkedCount = 0;
+
             for (SatimTransaction s : satimTransactions) {
-                // Trouver la transaction correspondante
-                Transaction correspondingTransaction = transactionRepository.findByReference(s.getStrRecoCode())
-                        .orElse(null);
+                // Récupérer la Transaction correspondante (maintenant sauvegardée)
+                Transaction correspondingTransaction = transactionRepository
+                        .findByReference(s.getStrRecoCode()).orElse(null);
 
                 if (correspondingTransaction != null) {
-                    // Vérifier si la meta-transaction n'existe pas déjà
+                    // ✅ CORRECTION IMPORTANTE: Vérifier par strCode, pas par strRecoCode
                     if (!metaTransactionRepository.existsByStrCode(s.getStrCode())) {
                         MetaTransaction meta = MetaTransaction.builder()
-                                .strCode(s.getStrCode()) // ✅ Ajout du strCode
+                                .strCode(s.getStrCode()) // ✅ ESSENTIEL: strCode pour le mapping
                                 .strRecoCode(s.getStrRecoCode())
                                 .strRecoNumb(s.getStrRecoNumb())
                                 .strOperCode(s.getStrOperCode())
@@ -91,15 +95,26 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
                                 .transaction(correspondingTransaction)
                                 .build();
 
-                        metaTransactions.add(meta);
+                        newMetaTransactions.add(meta);
+                        linkedCount++;
+                    } else {
+                        log.debug("MetaTransaction avec strCode={} existe déjà", s.getStrCode());
                     }
+                } else {
+                    log.warn("⚠️ Aucune Transaction trouvée pour SatimTransaction strCode={}, strRecoCode={}",
+                            s.getStrCode(), s.getStrRecoCode());
                 }
             }
 
-            if (!metaTransactions.isEmpty()) {
-                metaTransactionRepository.saveAll(metaTransactions);
-                log.info("✅ {} MetaTransactions sauvegardées", metaTransactions.size());
+            if (!newMetaTransactions.isEmpty()) {
+                metaTransactionRepository.saveAll(newMetaTransactions);
+                log.info("✅ {} MetaTransactions sauvegardées et liées", newMetaTransactions.size());
             }
+
+            log.info("📊 RÉSUMÉ IMPORT:");
+            log.info("   - {} SatimTransactions importées", satimTransactions.size());
+            log.info("   - {} nouvelles Transactions créées", newTransactions.size());
+            log.info("   - {} MetaTransactions liées", linkedCount);
 
         } catch (Exception e) {
             log.error("❌ Erreur import SATIM", e);
@@ -107,9 +122,38 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
         }
     }
 
+    /**
+     * ✅ NOUVELLE MÉTHODE: Récupérer ou créer une Transaction (évite les doublons)
+     */
+    private Transaction getOrCreateTransaction(SatimTransaction s) {
+        // Vérifier si une Transaction existe déjà avec cette référence
+        Transaction existingTransaction = transactionRepository
+                .findByReference(s.getStrRecoCode()).orElse(null);
+
+        if (existingTransaction != null) {
+            log.debug("Transaction existante trouvée pour référence: {}", s.getStrRecoCode());
+            return existingTransaction;
+        }
+
+        // Créer une nouvelle Transaction
+        return Transaction.builder()
+                .reference(s.getStrRecoCode())
+                .montant(s.getStrRecoNumb() != null ?
+                        BigDecimal.valueOf(s.getStrRecoNumb()) :
+                        BigDecimal.ZERO)
+                .type(parseTypeTransaction(s.getStrOperCode()))
+                .statut(StatutTransaction.NORMALE)
+                .dateTransaction(s.getStrProcDate() != null ?
+                        s.getStrProcDate() :
+                        LocalDate.now())
+                .build();
+    }
+
+    /**
+     * ✅ MÉTHODE AMÉLIORÉE: Parse d'une ligne CSV avec validation renforcée
+     */
     private SatimTransaction parseLineToTransaction(String line) {
         try {
-            // Support pour différents délimiteurs (virgule ou point-virgule)
             String[] fields = line.contains(";") ? line.split(";") : line.split(",");
 
             if (fields.length < 6) {
@@ -124,8 +168,24 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
             LocalDate procDate = parseDate(fields[4]);
             String termIden = fields[5].trim();
 
-            if (strCode == null || recoCode.isEmpty() || recoNumb == null || procDate == null) {
-                log.warn("Champ obligatoire manquant ou invalide : {}", line);
+            // ✅ VALIDATION RENFORCÉE
+            if (strCode == null || strCode <= 0) {
+                log.warn("strCode invalide ou manquant : {}", line);
+                return null;
+            }
+
+            if (recoCode.isEmpty()) {
+                log.warn("strRecoCode manquant : {}", line);
+                return null;
+            }
+
+            if (recoNumb == null || recoNumb < 0) {
+                log.warn("strRecoNumb invalide : {}", line);
+                return null;
+            }
+
+            if (procDate == null) {
+                log.warn("Date de traitement invalide : {}", line);
                 return null;
             }
 
@@ -142,17 +202,6 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
             log.error("Erreur parsing ligne: {}", line, e);
             return null;
         }
-    }
-
-    private Transaction convertToTransaction(SatimTransaction s) {
-        return Transaction.builder()
-                .reference(s.getStrRecoCode()) // Utilise strRecoCode comme référence
-                .montant(BigDecimal.valueOf(s.getStrRecoNumb())) // strRecoNumb devient le montant
-                .type(parseTypeTransaction(s.getStrOperCode()))
-                .statut(StatutTransaction.NORMALE)
-                .dateTransaction(s.getStrProcDate())
-                // banqueEmettrice et banqueAcquereuse peuvent être définies plus tard
-                .build();
     }
 
     private TypeTransaction parseTypeTransaction(String operCode) {
@@ -186,7 +235,6 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
         }
 
         try {
-            // Essayer plusieurs formats de date
             String dateTrimmed = s.trim();
 
             // Format principal: yyyy-MM-dd
