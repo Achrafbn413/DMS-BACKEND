@@ -3,5 +3,6 @@ package com.example.dms_backend.model;
 public enum TypeTransaction {
     VIREMENT,
     CARTE,
-    AUTRE, E_WALLET  // ✅ Ajoute cette valeur pour les transactions e-wallet
+    AUTRE,      // ✅ Fallback pour valeurs inconnues
+    E_WALLET    // ✅ Pour les transactions e-wallet
 }

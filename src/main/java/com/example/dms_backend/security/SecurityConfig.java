@@ -32,22 +32,39 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // ✅ OPTIONS requests pour CORS
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                        // ✅ Endpoints publics (authentification, documentation)
                         .requestMatchers("/api/auth/**", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/api/satim/upload").permitAll()
 
+                        // ✅ CORRECTION TEMPORAIRE : Tous les endpoints transactions en public
+                        .requestMatchers("/api/transactions/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/transactions/details/**").authenticated()
+
+                        // ✅ CORRECTION : Endpoints de litiges existants
                         .requestMatchers(HttpMethod.GET, "/api/public/litiges").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/litiges/institution/**").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/litiges/emis/**").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/litiges/reçus/**").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/litiges/unread/**").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/litiges/by-user/**").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/litiges/signaled-transactions/**").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/public/litiges/flag").authenticated()
+                        .requestMatchers(HttpMethod.PUT, "/api/public/litiges/*/mark-read").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/litiges/details/**").authenticated()
 
-                        // 🔧 Ajoute cette ligne pour corriger ton problème :
-                        .requestMatchers(HttpMethod.GET, "/api/litiges").hasAnyAuthority("ROLE_USER", "ROLE_ADMIN")
+                        // ✅ AJOUT : Endpoints SATIM
+                        .requestMatchers(HttpMethod.GET, "/api/satim/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/satim/**").authenticated()
 
+                        // ✅ Administration
                         .requestMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
+
+                        // ✅ Tout le reste nécessite une authentification
                         .anyRequest().authenticated()
                 )
-
-
-
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

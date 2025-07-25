@@ -1,6 +1,8 @@
 package com.example.dms_backend.controller;
+import com.example.dms_backend.dto.LitigeDetailsResponse;
 
 import com.example.dms_backend.dto.LitigeRequest;
+import com.example.dms_backend.dto.LitigeResponseDTO;
 import com.example.dms_backend.model.*;
 import com.example.dms_backend.repository.LitigeRepository;
 import com.example.dms_backend.repository.MetaTransactionRepository;
@@ -12,10 +14,13 @@ import com.example.dms_backend.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -33,119 +38,247 @@ public class LitigeController {
     private final NotificationService notificationService;
     private final LitigeService litigeService;
 
-    // ✅ AJOUT: Repositories nécessaires pour le diagnostic
     private final MetaTransactionRepository metaTransactionRepository;
     private final SatimTransactionRepository satimTransactionRepository;
 
-    @PostMapping
-    public ResponseEntity<?> creerLitigeClient(@RequestBody LitigeRequest request) {
-        logger.info("Tentative de création de litige avec transactionId={} et utilisateurId={}",
-                request.getTransactionId(), request.getUtilisateurId());
-
-        Optional<Transaction> transactionOpt = transactionRepository.findById(request.getTransactionId());
-        Optional<Utilisateur> utilisateurOpt = utilisateurRepository.findById(request.getUtilisateurId());
-
-        if (transactionOpt.isEmpty() || utilisateurOpt.isEmpty()) {
-            return ResponseEntity.badRequest().body("Transaction ou utilisateur introuvable.");
-        }
-
-        Transaction transaction = transactionOpt.get();
-        Utilisateur utilisateur = utilisateurOpt.get();
-
-        Litige litige = Litige.builder()
-                .type(request.getType())
-                .description(request.getDescription())
-                .statut(StatutLitige.CREE)
-                .dateCreation(LocalDate.now())
-                .transaction(transaction)
-                .declarePar(utilisateur)
-                .build();
-
-        transaction.setStatut(StatutTransaction.AVEC_LITIGE);
-        transaction.setLitige(litige);
-
-        litigeRepository.save(litige);
-        transactionRepository.save(transaction);
-
-        notificationService.notifierBanqueAcquereuse(litige);
-
-        return ResponseEntity.ok("Litige créé avec succès.");
-    }
-
+    /**
+     * ✅ Créer un litige sécurisé (méthode unique à utiliser)
+     */
     @PostMapping("/flag")
     public ResponseEntity<?> flagTransaction(@RequestBody LitigeRequest request) {
         logger.info("🎯 [API] POST /flag - Reçu: transactionId={}, utilisateurId={}",
                 request.getTransactionId(), request.getUtilisateurId());
 
         try {
+            if (request.getTransactionId() == null || request.getUtilisateurId() == null) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "TransactionId et UtilisateurId sont requis",
+                        "code", "MISSING_PARAMETERS"
+                ));
+            }
+
             Litige litige = litigeService.flagTransaction(request);
             logger.info("✅ Litige signalé avec succès, ID={}", litige.getId());
 
             return ResponseEntity.ok(Map.of(
                     "message", "Transaction signalée avec succès",
                     "litigeId", litige.getId(),
-                    "transactionId", litige.getTransaction().getId()
+                    "transactionId", litige.getTransaction().getId(),
+                    "statut", litige.getStatut().toString()
             ));
+
         } catch (IllegalStateException e) {
-            logger.warn("⚠️ Tentative de signalement d'une transaction déjà signalée: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of(
                     "error", e.getMessage(),
                     "code", "LITIGE_ALREADY_EXISTS"
             ));
-        } catch (RuntimeException e) {
-            logger.error("❌ Erreur lors du signalement du litige: {}", e.getMessage());
+        } catch (DataIntegrityViolationException e) {
             return ResponseEntity.badRequest().body(Map.of(
-                    "error", e.getMessage(),
-                    "code", "TRANSACTION_NOT_FOUND"
+                    "error", "Violation de contrainte de données",
+                    "code", "DATA_INTEGRITY_VIOLATION",
+                    "details", e.getMostSpecificCause().getMessage()
+            ));
+        } catch (TransactionSystemException e) {
+            return ResponseEntity.status(500).body(Map.of(
+                    "error", "Erreur de transaction de base de données",
+                    "code", "DATABASE_TRANSACTION_ERROR"
+            ));
+        } catch (DataAccessException e) {
+            return ResponseEntity.status(500).body(Map.of(
+                    "error", "Erreur d'accès aux données",
+                    "code", "DATABASE_ACCESS_ERROR"
             ));
         } catch (Exception e) {
-            logger.error("❌ Erreur interne lors du signalement du litige: {}", e.getMessage(), e);
+            logger.error("❌ Erreur lors du signalement de litige", e);
             return ResponseEntity.status(500).body(Map.of(
                     "error", "Erreur interne du serveur",
-                    "code", "INTERNAL_ERROR"
+                    "code", "INTERNAL_ERROR",
+                    "timestamp", LocalDateTime.now().toString()
             ));
         }
     }
 
+    /**
+     * ✅ Récupérer tous les litiges
+     */
     @GetMapping
     public List<Litige> getAllLitiges() {
         return litigeRepository.findAll();
     }
 
-    // ✅ NOUVEAU: Endpoint pour récupérer les litiges par institution
+    /**
+     * 🔥 CORRIGÉ : Litiges émis par notre institution (ce qu'on affiche dans le dashboard principal)
+     */
     @GetMapping("/institution/{institutionId}")
-    public ResponseEntity<List<Litige>> getLitigesByInstitution(@PathVariable Long institutionId) {
+    public ResponseEntity<List<LitigeResponseDTO>> getLitigesByInstitution(@PathVariable Long institutionId) {
+        logger.info("🔍 Récupération des litiges émis par l'institution: {}", institutionId);
+
         try {
-            logger.info("🏦 Récupération des litiges pour l'institution ID: {}", institutionId);
-            List<Litige> litiges = litigeRepository.findByInstitutionId(institutionId);
-            logger.info("✅ {} litiges trouvés pour l'institution {}", litiges.size(), institutionId);
-            return ResponseEntity.ok(litiges);
+            // ✅ CHANGEMENT : Utilise les litiges émis pour l'affichage principal
+            List<Litige> litiges = litigeRepository.findLitigesEmisParInstitution(institutionId);
+
+            List<LitigeResponseDTO> dtos = litiges.stream().map(l -> {
+                String banqueDeclaranteNom = "Notre banque";
+                String institutionDeclarantNom = "Nous";
+
+                // ✅ Vérification améliorée pour banqueDeclarante
+                if (l.getBanqueDeclarante() != null) {
+                    banqueDeclaranteNom = l.getBanqueDeclarante().getNom();
+                    logger.debug("✅ Banque déclarante trouvée: {}", banqueDeclaranteNom);
+                } else {
+                    logger.warn("⚠️ Banque déclarante manquante pour litige ID: {}", l.getId());
+                }
+
+                // Pour les litiges émis, on affiche contre qui on l'a déclaré
+                if (l.getTransaction() != null) {
+                    if (l.getTransaction().getBanqueAcquereuse() != null &&
+                            !l.getTransaction().getBanqueAcquereuse().getId().equals(institutionId)) {
+                        institutionDeclarantNom = "Contre " + l.getTransaction().getBanqueAcquereuse().getNom();
+                    } else if (l.getTransaction().getBanqueEmettrice() != null &&
+                            !l.getTransaction().getBanqueEmettrice().getId().equals(institutionId)) {
+                        institutionDeclarantNom = "Contre " + l.getTransaction().getBanqueEmettrice().getNom();
+                    }
+                }
+
+                return LitigeResponseDTO.builder()
+                        .id(l.getId())
+                        .type(l.getType())
+                        .statut(l.getStatut())
+                        .description(l.getDescription())
+                        .dateCreation(l.getDateCreation())
+                        .banqueDeclaranteNom(banqueDeclaranteNom)
+                        .institutionDeclarantNom(institutionDeclarantNom)
+                        .build();
+            }).toList();
+
+            logger.info("✅ {} litiges émis récupérés pour l'institution {}", dtos.size(), institutionId);
+            return ResponseEntity.ok(dtos);
+
         } catch (Exception e) {
-            logger.error("❌ Erreur récupération litiges pour institution {}: {}", institutionId, e.getMessage());
+            logger.error("❌ Erreur lors de la récupération des litiges pour l'institution {}", institutionId, e);
             return ResponseEntity.status(500).build();
         }
     }
 
-    // ✅ NOUVEAU: Endpoint pour récupérer les litiges non lus par institution
+    /**
+     * 🔥 NOUVEAU : Litiges émis par notre institution
+     */
+    @GetMapping("/emis/{institutionId}")
+    public ResponseEntity<List<LitigeResponseDTO>> getLitigesEmis(@PathVariable Long institutionId) {
+        logger.info("🔍 Récupération des litiges émis par l'institution: {}", institutionId);
+
+        try {
+            List<Litige> litiges = litigeRepository.findLitigesEmisParInstitution(institutionId);
+
+            List<LitigeResponseDTO> dtos = litiges.stream().map(l -> {
+                String banqueDeclaranteNom = "Nous";
+                String institutionDeclarantNom = "Notre institution";
+
+                if (l.getBanqueDeclarante() != null) {
+                    banqueDeclaranteNom = l.getBanqueDeclarante().getNom();
+                }
+
+                // Pour les litiges émis, la banque cible est acquereuse/emettrice
+                if (l.getTransaction() != null) {
+                    if (l.getTransaction().getBanqueAcquereuse() != null &&
+                            !l.getTransaction().getBanqueAcquereuse().getId().equals(institutionId)) {
+                        institutionDeclarantNom = "Contre " + l.getTransaction().getBanqueAcquereuse().getNom();
+                    } else if (l.getTransaction().getBanqueEmettrice() != null &&
+                            !l.getTransaction().getBanqueEmettrice().getId().equals(institutionId)) {
+                        institutionDeclarantNom = "Contre " + l.getTransaction().getBanqueEmettrice().getNom();
+                    }
+                }
+
+                return LitigeResponseDTO.builder()
+                        .id(l.getId())
+                        .type(l.getType())
+                        .statut(l.getStatut())
+                        .description(l.getDescription())
+                        .dateCreation(l.getDateCreation())
+                        .banqueDeclaranteNom(banqueDeclaranteNom)
+                        .institutionDeclarantNom(institutionDeclarantNom)
+                        .build();
+            }).toList();
+
+            logger.info("✅ {} litiges émis récupérés pour l'institution {}", dtos.size(), institutionId);
+            return ResponseEntity.ok(dtos);
+
+        } catch (Exception e) {
+            logger.error("❌ Erreur lors de la récupération des litiges émis pour l'institution {}", institutionId, e);
+            return ResponseEntity.status(500).build();
+        }
+    }
+
+    /**
+     * 🔥 CORRIGÉ : Litiges reçus d'autres banques
+     */
+    @GetMapping("/reçus/{institutionId}")
+    public ResponseEntity<List<LitigeResponseDTO>> getLitigesRecus(@PathVariable Long institutionId) {
+        logger.info("🔍 Récupération des litiges reçus pour l'institution: {}", institutionId);
+
+        try {
+            // ✅ CHANGEMENT PRINCIPAL : Utilise la nouvelle méthode
+            List<Litige> litiges = litigeRepository.findLitigesRecusParInstitution(institutionId);
+
+            List<LitigeResponseDTO> dtoList = litiges.stream().map(l -> {
+                String banqueDeclaranteNom = "Inconnue";
+                String institutionDeclarantNom = "Institution inconnue";
+
+                // ✅ LOGIQUE CORRIGÉE : banqueDeclarante existe maintenant
+                if (l.getBanqueDeclarante() != null) {
+                    banqueDeclaranteNom = l.getBanqueDeclarante().getNom();
+                    institutionDeclarantNom = l.getBanqueDeclarante().getNom();
+                    logger.debug("✅ Litige reçu - Banque déclarante: {}", banqueDeclaranteNom);
+                } else {
+                    logger.warn("⚠️ Litige reçu ID {} - Banque déclarante manquante", l.getId());
+                }
+
+                return LitigeResponseDTO.builder()
+                        .id(l.getId())
+                        .type(l.getType())
+                        .statut(l.getStatut())
+                        .description(l.getDescription())
+                        .dateCreation(l.getDateCreation())
+                        .banqueDeclaranteNom(banqueDeclaranteNom)
+                        .institutionDeclarantNom(institutionDeclarantNom)
+                        .build();
+            }).toList();
+
+            logger.info("✅ {} litiges reçus récupérés pour l'institution {}", dtoList.size(), institutionId);
+            return ResponseEntity.ok(dtoList);
+
+        } catch (Exception e) {
+            logger.error("❌ Erreur lors de la récupération des litiges reçus pour l'institution {}", institutionId, e);
+            return ResponseEntity.status(500).build();
+        }
+    }
+
+    /**
+     * 🔥 CORRIGÉ : Litiges non lus - Utilise la nouvelle méthode
+     */
     @GetMapping("/unread/{institutionId}")
     public ResponseEntity<List<Litige>> getUnreadLitigesByInstitution(@PathVariable Long institutionId) {
+        logger.info("🔍 Récupération des litiges non lus pour l'institution: {}", institutionId);
+
         try {
-            logger.info("🔔 Récupération des litiges non lus pour l'institution ID: {}", institutionId);
-            List<Litige> litiges = litigeRepository.findUnreadByInstitutionId(institutionId);
-            logger.info("✅ {} litiges non lus trouvés pour l'institution {}", litiges.size(), institutionId);
+            // ✅ Utilise la nouvelle méthode pour les notifications
+            List<Litige> litiges = litigeRepository.findNotificationsNonLues(institutionId);
+            logger.info("✅ {} notifications non lues trouvées pour l'institution {}", litiges.size(), institutionId);
             return ResponseEntity.ok(litiges);
         } catch (Exception e) {
-            logger.error("❌ Erreur récupération litiges non lus pour institution {}: {}", institutionId, e.getMessage());
+            logger.error("❌ Erreur lors de la récupération des notifications pour l'institution {}", institutionId, e);
             return ResponseEntity.status(500).build();
         }
     }
 
-    // ✅ NOUVEAU: Endpoint pour marquer un litige comme lu
+    /**
+     * ✅ Marquer litige comme lu
+     */
     @PutMapping("/{litigeId}/mark-read")
     public ResponseEntity<?> markAsRead(@PathVariable Long litigeId) {
-        try {
-            logger.info("👁️ Marquage du litige {} comme lu", litigeId);
+        logger.info("📖 Marquage du litige {} comme lu", litigeId);
 
+        try {
             Optional<Litige> litigeOpt = litigeRepository.findById(litigeId);
             if (litigeOpt.isEmpty()) {
                 logger.warn("⚠️ Litige {} non trouvé", litigeId);
@@ -153,13 +286,13 @@ public class LitigeController {
             }
 
             Litige litige = litigeOpt.get();
-            litige.setStatut(StatutLitige.VU); // Assuming you have this status
+            litige.setStatut(StatutLitige.VU);
             litigeRepository.save(litige);
 
             logger.info("✅ Litige {} marqué comme lu", litigeId);
             return ResponseEntity.ok(Map.of("message", "Litige marqué comme lu"));
         } catch (Exception e) {
-            logger.error("❌ Erreur marquage litige {} comme lu: {}", litigeId, e.getMessage());
+            logger.error("❌ Erreur lors du marquage du litige {} comme lu", litigeId, e);
             return ResponseEntity.status(500).body(Map.of(
                     "error", "Erreur interne du serveur"
             ));
@@ -167,109 +300,57 @@ public class LitigeController {
     }
 
     /**
-     * ✅ ENDPOINT DE DIAGNOSTIC: Vérifier l'existence d'une transaction par ID/strCode
-     * Utile pour déboguer les problèmes de signalement
+     * ✅ Récupérer les IDs des transactions signalées par un utilisateur donné
      */
-    @GetMapping("/diagnostic/transaction/{transactionId}")
-    public ResponseEntity<?> diagnosticTransaction(@PathVariable Long transactionId) {
-        logger.info("🔍 [DIAGNOSTIC] Recherche de transaction avec ID/strCode: {}", transactionId);
-
-        Map<String, Object> diagnostic = new HashMap<>();
-        diagnostic.put("searchId", transactionId);
-        diagnostic.put("timestamp", LocalDateTime.now());
+    @GetMapping("/by-user/{userId}")
+    public ResponseEntity<List<Long>> getTransactionIdsSignaledByUser(@PathVariable Long userId) {
+        logger.info("🔍 Récupération des transactions signalées par l'utilisateur: {}", userId);
 
         try {
-            // 1. Recherche directe dans Transaction
-            Optional<Transaction> directTransaction = transactionRepository.findById(transactionId);
-            diagnostic.put("foundByDirectId", directTransaction.isPresent());
-            if (directTransaction.isPresent()) {
-                Transaction t = directTransaction.get();
-                diagnostic.put("directTransaction", Map.of(
-                        "id", t.getId(),
-                        "reference", t.getReference() != null ? t.getReference() : "null",
-                        "montant", t.getMontant() != null ? t.getMontant() : "null",
-                        "statut", t.getStatut() != null ? t.getStatut() : "null",
-                        "hasLitige", t.getLitige() != null
-                ));
-            }
-
-            // 2. Recherche dans MetaTransaction par strCode
-            Optional<MetaTransaction> metaByStrCode = metaTransactionRepository.findByStrCode(transactionId);
-            diagnostic.put("foundMetaByStrCode", metaByStrCode.isPresent());
-            if (metaByStrCode.isPresent()) {
-                MetaTransaction mt = metaByStrCode.get();
-                diagnostic.put("metaTransaction", Map.of(
-                        "id", mt.getId() != null ? mt.getId() : "null",
-                        "strCode", mt.getStrCode() != null ? mt.getStrCode() : "null",
-                        "strRecoCode", mt.getStrRecoCode() != null ? mt.getStrRecoCode() : "null",
-                        "hasLinkedTransaction", mt.getTransaction() != null
-                ));
-
-                if (mt.getTransaction() != null) {
-                    Transaction linked = mt.getTransaction();
-                    diagnostic.put("linkedTransaction", Map.of(
-                            "id", linked.getId(),
-                            "reference", linked.getReference() != null ? linked.getReference() : "null",
-                            "statut", linked.getStatut() != null ? linked.getStatut() : "null",
-                            "hasLitige", linked.getLitige() != null
-                    ));
-                }
-            }
-
-            // 3. Recherche dans SatimTransaction
-            Optional<SatimTransaction> satimTransaction = satimTransactionRepository.findById(transactionId);
-            diagnostic.put("foundInSatim", satimTransaction.isPresent());
-            if (satimTransaction.isPresent()) {
-                SatimTransaction st = satimTransaction.get();
-                diagnostic.put("satimTransaction", Map.of(
-                        "strCode", st.getStrCode() != null ? st.getStrCode() : "null",
-                        "strRecoCode", st.getStrRecoCode() != null ? st.getStrRecoCode() : "null",
-                        "strRecoNumb", st.getStrRecoNumb() != null ? st.getStrRecoNumb() : "null",
-                        "strOperCode", st.getStrOperCode() != null ? st.getStrOperCode() : "null"
-                ));
-            }
-
-            // 4. Recherche par référence (si transactionId peut être une référence)
-            Optional<Transaction> byReference = transactionRepository.findByReference(transactionId.toString());
-            diagnostic.put("foundByReference", byReference.isPresent());
-
-            // 5. Statistiques générales
-            long totalTransactions = transactionRepository.count();
-            long totalMetaTransactions = metaTransactionRepository.count();
-            long totalSatimTransactions = satimTransactionRepository.count();
-            long orphanedMeta = metaTransactionRepository.countOrphanedMetaTransactions();
-
-            diagnostic.put("statistics", Map.of(
-                    "totalTransactions", totalTransactions,
-                    "totalMetaTransactions", totalMetaTransactions,
-                    "totalSatimTransactions", totalSatimTransactions,
-                    "orphanedMetaTransactions", orphanedMeta
-            ));
-
-            // 6. Recommandations
-            List<String> recommendations = new ArrayList<>();
-            if (!directTransaction.isPresent() && !metaByStrCode.isPresent() && !satimTransaction.isPresent()) {
-                recommendations.add("❌ Aucune transaction trouvée - Vérifiez l'import SATIM");
-            }
-            if (metaByStrCode.isPresent() && metaByStrCode.get().getTransaction() == null) {
-                recommendations.add("⚠️ MetaTransaction trouvée mais non liée - Problème d'import");
-            }
-            if (satimTransaction.isPresent() && !metaByStrCode.isPresent()) {
-                recommendations.add("🔧 SatimTransaction existe mais pas de MetaTransaction - Relancer l'import");
-            }
-            if (orphanedMeta > 0) {
-                recommendations.add("🧹 " + orphanedMeta + " MetaTransactions orphelines détectées");
-            }
-
-            diagnostic.put("recommendations", recommendations);
-
-            logger.info("✅ [DIAGNOSTIC] Diagnostic terminé pour transactionId={}", transactionId);
-            return ResponseEntity.ok(diagnostic);
-
+            List<Long> transactionIds = litigeRepository.findTransactionIdsByUser(userId);
+            logger.info("✅ {} transactions signalées trouvées pour l'utilisateur {}", transactionIds.size(), userId);
+            return ResponseEntity.ok(transactionIds);
         } catch (Exception e) {
-            logger.error("❌ [DIAGNOSTIC] Erreur lors du diagnostic: {}", e.getMessage(), e);
-            diagnostic.put("error", e.getMessage());
-            return ResponseEntity.status(500).body(diagnostic);
+            logger.error("❌ Erreur lors de la récupération des transactions signalées par l'utilisateur {}", userId, e);
+            return ResponseEntity.status(500).body(Collections.emptyList());
         }
     }
+
+    /**
+     * ✅ Alternative pour récupérer les transactions signalées par un utilisateur
+     */
+    @GetMapping("/signaled-transactions/{userId}")
+    public ResponseEntity<List<Long>> getSignaledTransactionsByUser(@PathVariable Long userId) {
+        logger.info("📋 Récupération des transactions signalées par utilisateur: {}", userId);
+
+        try {
+            List<Long> transactionIds = litigeService.getTransactionIdsSignaledByUser(userId);
+            logger.info("✅ {} transactions signalées trouvées pour utilisateur {}", transactionIds.size(), userId);
+            return ResponseEntity.ok(transactionIds);
+        } catch (Exception e) {
+            logger.error("❌ Erreur lors de la récupération des transactions signalées pour utilisateur {}: {}", userId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * 🆕 NOUVEAU : Récupérer les détails complets d'un litige
+     */
+    @GetMapping("/details/{litigeId}")
+    public ResponseEntity<LitigeDetailsResponse> getLitigeDetails(@PathVariable Long litigeId) {
+        logger.info("🔍 Récupération des détails du litige ID: {}", litigeId);
+
+        try {
+            LitigeDetailsResponse details = litigeService.getLitigeCompletDetails(litigeId);
+            return ResponseEntity.ok(details);
+        } catch (RuntimeException e) {
+            logger.error("❌ Erreur lors de la récupération des détails du litige {}: {}", litigeId, e.getMessage());
+            return ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            logger.error("❌ Erreur interne lors de la récupération des détails du litige {}", litigeId, e);
+            return ResponseEntity.status(500).build();
+        }
+    }
+
+
 }

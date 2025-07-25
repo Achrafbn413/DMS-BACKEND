@@ -73,4 +73,6 @@ public interface MetaTransactionRepository extends JpaRepository<MetaTransaction
      */
     @Query("SELECT mt FROM MetaTransaction mt LEFT JOIN FETCH mt.transaction WHERE mt.strRecoCode = :strRecoCode")
     List<MetaTransaction> findByStrRecoCodeWithTransaction(@Param("strRecoCode") String strRecoCode);
+
+
 }

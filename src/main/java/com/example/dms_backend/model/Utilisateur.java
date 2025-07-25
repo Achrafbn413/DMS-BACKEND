@@ -48,8 +48,13 @@ public class Utilisateur {
     @JoinColumn(name = "institution_id", nullable = true)
     private Institution institution;
 
+
+
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = true)
     private NiveauAcces niveaux;
+
+
 
 }

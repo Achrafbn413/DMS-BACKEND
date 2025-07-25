@@ -32,4 +32,11 @@ public class SatimTransaction {
 
     @Column(name = "str_term_iden")
     private String strTermIden;
+
+    // ✅ NOUVEAUX CHAMPS ESSENTIELS
+    @Column(name = "str_issu_ban_code")
+    private String strIssuBanCode;
+
+    @Column(name = "str_acqu_ban_code")
+    private String strAcquBanCode;
 }

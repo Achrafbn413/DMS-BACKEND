@@ -1,12 +1,15 @@
 package com.example.dms_backend.service.impl;
 
 import com.example.dms_backend.model.*;
+import com.example.dms_backend.repository.InstitutionRepository;
+import com.example.dms_backend.repository.InstitutionSatimMappingRepository;
 import com.example.dms_backend.repository.MetaTransactionRepository;
 import com.example.dms_backend.repository.SatimTransactionRepository;
 import com.example.dms_backend.repository.TransactionRepository;
 import com.example.dms_backend.service.SatimTransactionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -28,12 +31,16 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
     private final SatimTransactionRepository satimTransactionRepository;
     private final TransactionRepository transactionRepository;
     private final MetaTransactionRepository metaTransactionRepository;
+    private final InstitutionRepository institutionRepository;
+    // ✅ NOUVEAU : Injection repository mapping
+    private final InstitutionSatimMappingRepository institutionSatimMappingRepository;
 
     @Override
     @Transactional
     public void importFile(MultipartFile file) throws Exception {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
             List<SatimTransaction> satimTransactions = new ArrayList<>();
+
             String line;
             reader.readLine(); // Ignore header
 
@@ -123,19 +130,27 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
     }
 
     /**
-     * ✅ NOUVELLE MÉTHODE: Récupérer ou créer une Transaction (évite les doublons)
+     * ✅ MÉTHODE COMPLÈTEMENT CORRIGÉE : Utilise les codes SATIM réels
      */
     private Transaction getOrCreateTransaction(SatimTransaction s) {
-        // Vérifier si une Transaction existe déjà avec cette référence
         Transaction existingTransaction = transactionRepository
                 .findByReference(s.getStrRecoCode()).orElse(null);
 
         if (existingTransaction != null) {
-            log.debug("Transaction existante trouvée pour référence: {}", s.getStrRecoCode());
+            log.debug("Transaction existante trouvée: {}", s.getStrRecoCode());
             return existingTransaction;
         }
 
-        // Créer une nouvelle Transaction
+        // ✅ NOUVELLE LOGIQUE : Utiliser codes SATIM réels
+        Institution emettrice = findInstitutionBySatimCode(s.getStrIssuBanCode());
+        Institution acquereuse = findInstitutionBySatimCode(s.getStrAcquBanCode());
+
+        // Log pour debug réaliste
+        log.info("💳 Transaction {} : {} → {}",
+                s.getStrRecoCode(),
+                emettrice != null ? emettrice.getNom() : "INCONNUE (" + s.getStrIssuBanCode() + ")",
+                acquereuse != null ? acquereuse.getNom() : "INCONNUE (" + s.getStrAcquBanCode() + ")");
+
         return Transaction.builder()
                 .reference(s.getStrRecoCode())
                 .montant(s.getStrRecoNumb() != null ?
@@ -146,18 +161,32 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
                 .dateTransaction(s.getStrProcDate() != null ?
                         s.getStrProcDate() :
                         LocalDate.now())
+                .banqueEmettrice(emettrice)    // ✅ RÉEL depuis SATIM
+                .banqueAcquereuse(acquereuse)  // ✅ RÉEL depuis SATIM
                 .build();
     }
 
+    // ✅ NOUVELLE MÉTHODE : Trouver institution par code SATIM
+    private Institution findInstitutionBySatimCode(String satimCode) {
+        if (satimCode == null || satimCode.trim().isEmpty()) {
+            log.warn("⚠️ Code SATIM vide ou null");
+            return null;
+        }
+
+        return institutionSatimMappingRepository
+                .findInstitutionBySatimCode(satimCode.trim())
+                .orElse(null);
+    }
+
     /**
-     * ✅ MÉTHODE AMÉLIORÉE: Parse d'une ligne CSV avec validation renforcée
+     * ✅ MÉTHODE CORRIGÉE : Parse 8 champs au lieu de 6
      */
     private SatimTransaction parseLineToTransaction(String line) {
         try {
             String[] fields = line.contains(";") ? line.split(";") : line.split(",");
 
-            if (fields.length < 6) {
-                log.warn("Ligne invalide (moins de 6 champs): {}", line);
+            if (fields.length < 8) { // ✅ MAINTENANT 8 champs minimum
+                log.warn("Ligne invalide (moins de 8 champs): {}", line);
                 return null;
             }
 
@@ -167,25 +196,17 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
             String operCode = fields[3].trim();
             LocalDate procDate = parseDate(fields[4]);
             String termIden = fields[5].trim();
+            String issuBanCode = fields[6].trim(); // ✅ NOUVEAU
+            String acquBanCode = fields[7].trim(); // ✅ NOUVEAU
 
-            // ✅ VALIDATION RENFORCÉE
+            // ✅ VALIDATIONS
             if (strCode == null || strCode <= 0) {
-                log.warn("strCode invalide ou manquant : {}", line);
+                log.warn("strCode invalide : {}", line);
                 return null;
             }
 
             if (recoCode.isEmpty()) {
                 log.warn("strRecoCode manquant : {}", line);
-                return null;
-            }
-
-            if (recoNumb == null || recoNumb < 0) {
-                log.warn("strRecoNumb invalide : {}", line);
-                return null;
-            }
-
-            if (procDate == null) {
-                log.warn("Date de traitement invalide : {}", line);
                 return null;
             }
 
@@ -196,6 +217,8 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
                     .strOperCode(operCode)
                     .strProcDate(procDate)
                     .strTermIden(termIden)
+                    .strIssuBanCode(issuBanCode)  // ✅ NOUVEAU
+                    .strAcquBanCode(acquBanCode)  // ✅ NOUVEAU
                     .build();
 
         } catch (Exception e) {
@@ -205,6 +228,10 @@ public class SatimTransactionServiceImpl implements SatimTransactionService {
     }
 
     private TypeTransaction parseTypeTransaction(String operCode) {
+        return getTypeTransaction(operCode, log);
+    }
+
+    public static TypeTransaction getTypeTransaction(String operCode, Logger log) {
         if (operCode == null || operCode.trim().isEmpty()) {
             return TypeTransaction.AUTRE;
         }
