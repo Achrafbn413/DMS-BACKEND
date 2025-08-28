@@ -37,6 +37,7 @@ public class SecurityConfig {
 
                         // ✅ Endpoints publics (authentification, documentation)
                         .requestMatchers("/api/auth/**", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/admin/institutions/public/**").permitAll()
                         .requestMatchers("/api/satim/upload").permitAll()
 
                         // ✅ CORRECTION TEMPORAIRE : Tous les endpoints transactions en public
@@ -54,16 +55,21 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/public/litiges/flag").authenticated()
                         .requestMatchers(HttpMethod.PUT, "/api/public/litiges/*/mark-read").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/public/litiges/details/**").authenticated()
+                                // ✅ Chargeback : Initiation, Représentation, Second Presentment
+                        // ✅ CORRECTION: Chargeback endpoints simplifiés
+                        .requestMatchers("/api/public/chargebacks/**").authenticated()
 
-                        // ✅ AJOUT : Endpoints SATIM
+                                // ✅ AJOUT : Endpoints SATIM
                         .requestMatchers(HttpMethod.GET, "/api/satim/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/satim/**").authenticated()
 
                         // ✅ Administration
                         .requestMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
 
+
                         // ✅ Tout le reste nécessite une authentification
                         .anyRequest().authenticated()
+
                 )
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
@@ -71,12 +77,18 @@ public class SecurityConfig {
     }
 
     @Bean
+
+
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("http://localhost:4200"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        // ✅ CORRECTION: Ajout de patterns plus permissifs pour le développement
+        config.setAllowedOriginPatterns(List.of("http://localhost:4200", "http://127.0.0.1:4200"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
+        // ✅ CORRECTION: Headers étendus pour éviter les rejets CORS
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
+        config.setExposedHeaders(List.of("Authorization", "Content-Type"));
         config.setAllowCredentials(true);
+        config.setMaxAge(3600L); // ✅ AJOUT: Cache preflight pour 1 heure
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

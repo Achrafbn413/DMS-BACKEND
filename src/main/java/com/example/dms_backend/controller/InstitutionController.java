@@ -65,4 +65,24 @@ public class InstitutionController {
             );
         }
     }
+    // ===== ENDPOINTS PUBLICS/UTILISATEUR =====
+    /**
+     * Endpoint public pour récupérer les institutions activées
+     * Accessible sans droits admin - pour les pages utilisateur
+     * GET /api/admin/institutions/public/enabled
+     */
+    @GetMapping("/public/enabled")
+    public List<Institution> getPublicEnabledInstitutions() {
+        return institutionRepository.findByEnabledTrue();
+    }
+
+    /**
+     * Endpoint public pour récupérer toutes les institutions
+     * Accessible sans droits admin - pour les pages utilisateur
+     * GET /api/admin/institutions/public/all
+     */
+    @GetMapping("/public/all")
+    public List<Institution> getPublicAllInstitutions() {
+        return institutionRepository.findAll();
+    }
 }
