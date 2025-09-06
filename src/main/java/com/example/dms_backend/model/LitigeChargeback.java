@@ -6,7 +6,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
-
+import java.util.Arrays;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -17,6 +17,8 @@ import java.util.Objects;
  * Entité de liaison pour étendre les fonctionnalités chargeback d'un litige
  * Table: LITIGES_CHARGEBACK
  */
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 @Entity
 @Table(name = "LITIGES_CHARGEBACK",
         indexes = {
@@ -27,6 +29,7 @@ import java.util.Objects;
         uniqueConstraints = {
                 @UniqueConstraint(name = "UK_LITIGES_CHARGEBACK_LITIGE", columnNames = "LITIGE_ID")
         })
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class LitigeChargeback {
 
     @Id
@@ -131,8 +134,8 @@ public class LitigeChargeback {
     }
 
     public void setPhaseActuelle(String phaseActuelle) {
-        this.phaseActuelle = phaseActuelle;
-        this.dateDerniereAction = LocalDateTime.now();
+        // Utiliser la méthode de progression avec validation
+        this.progresserVersPhase(phaseActuelle);
     }
 
     public String getMotifChargeback() {
@@ -252,9 +255,9 @@ public class LitigeChargeback {
         return Boolean.TRUE.equals(peutEtreEscalade);
     }
 
-    public boolean isDeadlineDepassee() {
+   /* public boolean isDeadlineDepassee() {
         return deadlineActuelle != null && deadlineActuelle.isBefore(LocalDateTime.now());
-    }
+    }*/
 
     public boolean isPhaseFinale() {
         return "FINALISE".equals(phaseActuelle);
@@ -267,24 +270,110 @@ public class LitigeChargeback {
     /**
      * Met à jour la phase et la date de dernière action
      */
+    /**
+     * Met à jour la phase et la date de dernière action avec validation
+     */
     public void progresserVersPhase(String nouvellePhase) {
+        // Validation des phases autorisées
+        java.util.List<String> phasesValides = java.util.Arrays.asList(
+                "CHARGEBACK_INITIAL", "REPRESENTATION", "PRE_ARBITRAGE", "ARBITRAGE", "FINALISE"
+        );
+
+        if (nouvellePhase == null || nouvellePhase.trim().isEmpty()) {
+            throw new IllegalArgumentException("La nouvelle phase ne peut pas être nulle ou vide");
+        }
+
+        if (!phasesValides.contains(nouvellePhase)) {
+            throw new IllegalArgumentException("Phase non autorisée: " + nouvellePhase +
+                    ". Phases valides: " + phasesValides);
+        }
+
+        // Log de la progression (optionnel - supprimer si pas de logging)
+        String ancienePhase = this.phaseActuelle;
+
         this.phaseActuelle = nouvellePhase;
         this.dateDerniereAction = LocalDateTime.now();
+        this.dateModification = LocalDateTime.now();
+
+        // Marquer comme phase finale si nécessaire
+        if ("FINALISE".equals(nouvellePhase)) {
+            this.peutEtreEscalade = false;
+        }
+
+        // Recalculer les jours restants après changement de phase
+        this.calculerJoursRestants();
     }
 
     /**
      * Calcule les jours restants jusqu'à la deadline
      */
+    /**
+     * Calcule les jours restants jusqu'à la deadline
+     */
+    /**
+     * Calcule les jours restants jusqu'à la deadline
+     */
     public void calculerJoursRestants() {
-        if (deadlineActuelle != null) {
+        if (deadlineActuelle != null && !isPhaseFinale()) {
             long joursRestants = java.time.temporal.ChronoUnit.DAYS.between(
-                    LocalDateTime.now(), deadlineActuelle
+                    LocalDateTime.now().toLocalDate(),
+                    deadlineActuelle.toLocalDate()
             );
             this.joursRestantsCalcule = (int) Math.max(0, joursRestants);
         } else {
             this.joursRestantsCalcule = null;
         }
     }
+
+    /**
+     * Vérifie si la deadline est urgente (moins de 3 jours)
+     */
+    public boolean isDeadlineUrgente() {
+        if (deadlineActuelle == null || isPhaseFinale()) {
+            return false;
+        }
+
+        long joursRestants = java.time.temporal.ChronoUnit.DAYS.between(
+                LocalDateTime.now().toLocalDate(),
+                deadlineActuelle.toLocalDate()
+        );
+
+        return joursRestants <= 3 && joursRestants >= 0;
+    }
+
+    /**
+     * Vérifie si la deadline est dépassée
+     */
+    public boolean isDeadlineDepassee() {
+        return deadlineActuelle != null &&
+                !isPhaseFinale() &&
+                deadlineActuelle.isBefore(LocalDateTime.now());
+    }
+    /**
+     * Vérifie si la deadline est urgente (moins de 3 jours)
+   /*
+    public boolean isDeadlineUrgente() {
+        if (deadlineActuelle == null || isPhaseFinale()) {
+            return false;
+        }
+
+        long joursRestants = java.time.temporal.ChronoUnit.DAYS.between(
+                LocalDateTime.now().toLocalDate(),
+                deadlineActuelle.toLocalDate()
+        );
+
+        return joursRestants <= 3 && joursRestants >= 0;
+    }
+*/
+    /**
+     * Vérifie si la deadline est dépassée
+     *//*
+    @Override
+    public boolean isDeadlineDepassee() {
+        return deadlineActuelle != null &&
+                !isPhaseFinale() &&
+                deadlineActuelle.isBefore(LocalDateTime.now());
+    }*/
 
     /**
      * Ajoute un justificatif à ce litige chargeback
@@ -324,8 +413,83 @@ public class LitigeChargeback {
                 ", phaseActuelle='" + phaseActuelle + '\'' +
                 ", motifChargeback='" + motifChargeback + '\'' +
                 ", montantConteste=" + montantConteste +
+                ", peutEtreEscalade=" + peutEtreEscalade +
                 ", deadlineActuelle=" + deadlineActuelle +
+                ", joursRestantsCalcule=" + joursRestantsCalcule +
                 ", dateCreation=" + dateCreation +
+                ", dateModification=" + dateModification +
                 '}';
+    }
+
+    /**
+     * Vérifie si une progression vers une nouvelle phase est autorisée
+     */
+    public boolean peutProgresserVers(String nouvellePhase) {
+        if (nouvellePhase == null || this.phaseActuelle == null) {
+            return false;
+        }
+
+        // Si déjà finalisé, aucune progression possible
+        if (isPhaseFinale()) {
+            return false;
+        }
+
+        // Logique de progression séquentielle
+        switch (this.phaseActuelle) {
+            case "CHARGEBACK_INITIAL":
+                return "REPRESENTATION".equals(nouvellePhase);
+            case "REPRESENTATION":
+                return "PRE_ARBITRAGE".equals(nouvellePhase) || "FINALISE".equals(nouvellePhase);
+            case "PRE_ARBITRAGE":
+                return "ARBITRAGE".equals(nouvellePhase) || "FINALISE".equals(nouvellePhase);
+            case "ARBITRAGE":
+                return "FINALISE".equals(nouvellePhase);
+            default:
+                return false;
+        }
+    }
+    /**
+     * Vérifie si le chargeback est en phase initiale
+     */
+    public boolean isPhaseInitiale() {
+        return "CHARGEBACK_INITIAL".equals(phaseActuelle);
+    }
+
+    /**
+     * Vérifie si le chargeback est en phase de représentation
+     */
+    public boolean isEnRepresentation() {
+        return "REPRESENTATION".equals(phaseActuelle);
+    }
+
+    /**
+     * Vérifie si le chargeback est en pré-arbitrage
+     */
+    public boolean isEnPreArbitrage() {
+        return "PRE_ARBITRAGE".equals(phaseActuelle);
+    }
+
+    /**
+     * Obtient le libellé français de la phase actuelle
+     */
+    public String getPhaseLibelle() {
+        if (phaseActuelle == null) {
+            return "Phase inconnue";
+        }
+
+        switch (phaseActuelle) {
+            case "CHARGEBACK_INITIAL":
+                return "Chargeback Initial";
+            case "REPRESENTATION":
+                return "Représentation";
+            case "PRE_ARBITRAGE":
+                return "Pré-Arbitrage";
+            case "ARBITRAGE":
+                return "Arbitrage";
+            case "FINALISE":
+                return "Finalisé";
+            default:
+                return "Phase: " + phaseActuelle;
+        }
     }
 }

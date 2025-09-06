@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -149,61 +150,114 @@ public class ChargebackWorkflowService {
     // 🔄 REPRÉSENTATION
     // ====================================================================
 
+
     @Transactional
     public LitigeChargebackDTO traiterRepresentation(RepresentationRequest request) {
-        log.info("🔄 [REPRESENTATION] Traitement - LitigeId: {}, TypeReponse: {}",
-                request.getLitigeId(), request.getTypeReponse());
+        log.info("🔄 [REPRESENTATION] ===== DÉBUT TRAITEMENT =====");
+        log.info("🔄 [REPRESENTATION] LitigeId: {}, TypeReponse: {}", request.getLitigeId(), request.getTypeReponse());
+        log.info("🔄 [REPRESENTATION] Utilisateur: {}, Banque: {}", request.getUtilisateurAcquereurId(), request.getBanqueAcquereuseId());
+        log.info("🔄 [REPRESENTATION] Réponse détaillée: {}", request.getReponseDetaillee());
 
         try {
             // 1. Validation de la requête
+            log.info("🔄 [STEP1] Validation de la requête...");
             validateRepresentationRequest(request);
+            log.info("✅ [STEP1] Validation OK");
 
-            // 2. Récupération du litige chargeback
+            // 2. Récupération du litige chargeback avec vérifications
+            log.info("🔄 [STEP2] Récupération chargeback pour litigeId: {}", request.getLitigeId());
             LitigeChargeback litigeChargeback = getLitigeChargebackById(request.getLitigeId());
+            log.info("✅ [STEP2] Chargeback trouvé - Phase actuelle: {}", litigeChargeback.getPhaseActuelle());
 
-            // 3. Vérification de la phase
+            // 3. Vérification de la phase avec message détaillé
+            log.info("🔄 [STEP3] Vérification de la phase...");
             if (!"CHARGEBACK_INITIAL".equals(litigeChargeback.getPhaseActuelle())) {
-                throw new IllegalStateException("La représentation n'est possible qu'en phase CHARGEBACK_INITIAL");
+                log.error("❌ [STEP3] Phase incorrecte - Attendue: CHARGEBACK_INITIAL, Actuelle: {}",
+                        litigeChargeback.getPhaseActuelle());
+                throw new IllegalStateException(String.format(
+                        "La représentation n'est possible qu'en phase CHARGEBACK_INITIAL. Phase actuelle: %s",
+                        litigeChargeback.getPhaseActuelle()));
             }
+            log.info("✅ [STEP3] Phase valide");
 
-            // 4. Validation des droits utilisateur (banque acquéreuse)
+            // 4. Validation des droits utilisateur
+            log.info("🔄 [STEP4] Validation droits utilisateur ID: {}", request.getUtilisateurAcquereurId());
             Utilisateur utilisateurAcquereur = validateUserRightsAcquereur(request.getUtilisateurAcquereurId(), litigeChargeback);
+            log.info("✅ [STEP4] Droits validés - Utilisateur: {}, Institution: {}",
+                    utilisateurAcquereur.getNom(), utilisateurAcquereur.getInstitution().getNom());
 
             // 5. Traitement selon le type de réponse
+            log.info("🔄 [STEP5] Traitement du type de réponse: {}", request.getTypeReponse());
             switch (request.getTypeReponse()) {
                 case "ACCEPTATION_TOTALE":
+                    log.info("✅ [STEP5] Traitement acceptation totale...");
                     traiterAcceptationTotale(litigeChargeback, request, utilisateurAcquereur);
                     break;
                 case "ACCEPTATION_PARTIELLE":
+                    log.info("🔄 [STEP5] Traitement acceptation partielle...");
                     traiterAcceptationPartielle(litigeChargeback, request, utilisateurAcquereur);
                     break;
                 case "CONTESTATION":
+                    log.info("⚔️ [STEP5] Traitement contestation...");
                     traiterContestation(litigeChargeback, request, utilisateurAcquereur);
                     break;
                 default:
+                    log.error("❌ [STEP5] Type de réponse non reconnu: {}", request.getTypeReponse());
                     throw new IllegalArgumentException("Type de réponse non reconnu : " + request.getTypeReponse());
             }
+            log.info("✅ [STEP5] Type de réponse traité");
 
             // 6. Ajout des justificatifs de représentation
+            log.info("🔄 [STEP6] Ajout des justificatifs...");
             if (request.getJustificatifsDefense() != null && !request.getJustificatifsDefense().isEmpty()) {
+                log.info("📎 [STEP6] Ajout de {} justificatifs", request.getJustificatifsDefense().size());
                 ajouterJustificatifsRepresentation(litigeChargeback, request.getJustificatifsDefense(), utilisateurAcquereur);
+            } else {
+                log.info("📎 [STEP6] Aucun justificatif à ajouter");
             }
+            log.info("✅ [STEP6] Justificatifs traités");
 
             // 7. Création de l'échange de représentation
+            log.info("🔄 [STEP7] Création de l'échange...");
             creerEchangeRepresentation(litigeChargeback, request, utilisateurAcquereur);
+            log.info("✅ [STEP7] Échange créé");
 
             // 8. Notification à la banque émettrice
-            Litige litige = litigeRepository.findById(litigeChargeback.getLitigeId()).orElse(null);
-            if (litige != null) {
-                notifierBanqueEmettrice(litige, utilisateurAcquereur, "Réponse de représentation : " + request.getTypeReponse());
+            log.info("🔄 [STEP8] Notification banque émettrice...");
+            try {
+                Litige litige = litigeRepository.findById(litigeChargeback.getLitigeId()).orElse(null);
+                if (litige != null) {
+                    notifierBanqueEmettrice(litige, utilisateurAcquereur, "Réponse de représentation : " + request.getTypeReponse());
+                    log.info("✅ [STEP8] Notification envoyée");
+                } else {
+                    log.warn("⚠️ [STEP8] Litige non trouvé pour notification");
+                }
+            } catch (Exception e) {
+                log.warn("⚠️ [STEP8] Erreur notification (non-bloquante): {}", e.getMessage());
             }
 
-            log.info("✅ [REPRESENTATION] Traitement terminé - Phase: {}", litigeChargeback.getPhaseActuelle());
+            // 9. Sauvegarde finale et retour
+            log.info("🔄 [STEP9] Sauvegarde finale...");
+            LitigeChargeback savedChargeback = litigeChargebackRepository.save(litigeChargeback);
+            log.info("✅ [STEP9] Chargeback sauvegardé - ID: {}, Phase finale: {}",
+                    savedChargeback.getId(), savedChargeback.getPhaseActuelle());
 
-            return LitigeChargebackDTO.fromEntity(litigeChargeback);
+            log.info("✅ [REPRESENTATION] ===== TRAITEMENT TERMINÉ AVEC SUCCÈS =====");
 
+            return LitigeChargebackDTO.fromEntity(savedChargeback);
+
+        } catch (IllegalArgumentException e) {
+            log.error("❌ [REPRESENTATION] Erreur de validation: {}", e.getMessage());
+            throw e;
+        } catch (IllegalStateException e) {
+            log.error("❌ [REPRESENTATION] Erreur d'état: {}", e.getMessage());
+            throw e;
         } catch (Exception e) {
-            log.error("❌ [REPRESENTATION] Erreur lors du traitement", e);
+            log.error("❌ [REPRESENTATION] Erreur inattendue", e);
+            log.error("❌ [REPRESENTATION] Type: {}, Message: {}", e.getClass().getSimpleName(), e.getMessage());
+            if (e.getCause() != null) {
+                log.error("❌ [REPRESENTATION] Cause: {}", e.getCause().getMessage());
+            }
             throw new RuntimeException("Erreur lors du traitement de la représentation : " + e.getMessage(), e);
         }
     }
@@ -382,15 +436,55 @@ public class ChargebackWorkflowService {
     }
 
     private void validateRepresentationRequest(RepresentationRequest request) {
+        log.info("🔍 [VALIDATE-REQUEST] Validation de la requête de représentation...");
+
+        if (request == null) {
+            log.error("❌ [VALIDATE-REQUEST] Requête nulle");
+            throw new IllegalArgumentException("La requête de représentation ne peut pas être nulle");
+        }
+
         if (request.getLitigeId() == null) {
+            log.error("❌ [VALIDATE-REQUEST] LitigeId manquant");
             throw new IllegalArgumentException("L'ID du litige est obligatoire");
         }
+
         if (request.getUtilisateurAcquereurId() == null) {
+            log.error("❌ [VALIDATE-REQUEST] UtilisateurAcquereurId manquant");
             throw new IllegalArgumentException("L'ID de l'utilisateur acquéreur est obligatoire");
         }
+
+        if (request.getBanqueAcquereuseId() == null) {
+            log.error("❌ [VALIDATE-REQUEST] BanqueAcquereuseId manquant");
+            throw new IllegalArgumentException("L'ID de la banque acquéreuse est obligatoire");
+        }
+
         if (request.getTypeReponse() == null || request.getTypeReponse().trim().isEmpty()) {
+            log.error("❌ [VALIDATE-REQUEST] TypeReponse manquant ou vide");
             throw new IllegalArgumentException("Le type de réponse est obligatoire");
         }
+
+        // Validation des types de réponse autorisés
+        if (!Arrays.asList("ACCEPTATION_TOTALE", "ACCEPTATION_PARTIELLE", "CONTESTATION").contains(request.getTypeReponse())) {
+            log.error("❌ [VALIDATE-REQUEST] TypeReponse invalide: {}", request.getTypeReponse());
+            throw new IllegalArgumentException("Type de réponse invalide : " + request.getTypeReponse());
+        }
+
+        if (request.getReponseDetaillee() == null || request.getReponseDetaillee().trim().length() < 20) {
+            log.error("❌ [VALIDATE-REQUEST] ReponseDetaillee invalide - Longueur: {}",
+                    request.getReponseDetaillee() != null ? request.getReponseDetaillee().length() : 0);
+            throw new IllegalArgumentException("La réponse détaillée est obligatoire (minimum 20 caractères)");
+        }
+
+        // Validation spécifique pour acceptation partielle
+        if ("ACCEPTATION_PARTIELLE".equals(request.getTypeReponse())) {
+            if (request.getMontantAccepte() == null || request.getMontantAccepte().compareTo(BigDecimal.ZERO) <= 0) {
+                log.error("❌ [VALIDATE-REQUEST] Montant accepté invalide pour acceptation partielle: {}", request.getMontantAccepte());
+                throw new IllegalArgumentException("Le montant accepté doit être positif pour une acceptation partielle");
+            }
+        }
+
+        log.info("✅ [VALIDATE-REQUEST] Validation réussie - TypeReponse: {}, LitigeId: {}",
+                request.getTypeReponse(), request.getLitigeId());
     }
 
     private void validateSecondPresentmentRequest(SecondPresentmentRequest request) {
@@ -423,8 +517,24 @@ public class ChargebackWorkflowService {
     }
 
     private LitigeChargeback getLitigeChargebackById(Long litigeId) {
-        return litigeChargebackRepository.findByLitigeId(litigeId)
-                .orElseThrow(() -> new IllegalArgumentException("Litige chargeback non trouvé pour le litige : " + litigeId));
+        log.info("🔍 Recherche chargeback pour litigeId: {}", litigeId);
+
+        Optional<LitigeChargeback> result = litigeChargebackRepository.findByLitigeId(litigeId);
+
+        if (!result.isPresent()) {
+            log.error("❌ Aucun chargeback trouvé pour litigeId: {}", litigeId);
+            // Debug: lister tous les chargebacks disponibles
+            List<LitigeChargeback> allChargebacks = litigeChargebackRepository.findAll();
+            log.info("📊 Chargebacks disponibles: {}",
+                    allChargebacks.stream()
+                            .map(cb -> String.format("ID:%d,LitigeId:%d,Phase:%s", cb.getId(), cb.getLitigeId(), cb.getPhaseActuelle()))
+                            .collect(java.util.stream.Collectors.toList()));
+            throw new IllegalArgumentException("Litige chargeback non trouvé pour le litige : " + litigeId);
+        }
+
+        LitigeChargeback chargeback = result.get();
+        log.info("✅ Chargeback trouvé - ID: {}, Phase: {}", chargeback.getId(), chargeback.getPhaseActuelle());
+        return chargeback;
     }
 
     private Utilisateur validateUserRights(Long utilisateurId, Litige litige) {
@@ -469,14 +579,51 @@ public class ChargebackWorkflowService {
     }
 
     private Utilisateur validateUserRightsAcquereur(Long utilisateurId, LitigeChargeback litigeChargeback) {
-        Litige litige = getLitigeById(litigeChargeback.getLitigeId());
-        Utilisateur utilisateur = validateUserRights(utilisateurId, litige);
+        log.info("🔍 [VALIDATE-ACQUEREUR] Validation droits acquéreur - UserId: {}, LitigeChargebackId: {}",
+                utilisateurId, litigeChargeback.getId());
 
-        // Vérification spécifique banque acquéreuse
-        if (!litige.getTransaction().getBanqueAcquereuse().getId().equals(utilisateur.getInstitution().getId())) {
-            throw new IllegalArgumentException("Seule la banque acquéreuse peut effectuer cette action");
+        // Récupération du litige
+        Litige litige = getLitigeById(litigeChargeback.getLitigeId());
+        log.info("🔍 [VALIDATE-ACQUEREUR] Litige trouvé - ID: {}", litige.getId());
+
+        // Validation générale des droits
+        Utilisateur utilisateur = validateUserRights(utilisateurId, litige);
+        log.info("🔍 [VALIDATE-ACQUEREUR] Utilisateur validé - Nom: {}, Institution: {}",
+                utilisateur.getNom(), utilisateur.getInstitution().getNom());
+
+        // Vérifications de sécurité
+        Transaction transaction = litige.getTransaction();
+        if (transaction == null) {
+            log.error("❌ [VALIDATE-ACQUEREUR] Transaction manquante pour le litige: {}", litige.getId());
+            throw new IllegalStateException("Transaction manquante pour le litige");
         }
 
+        if (transaction.getBanqueAcquereuse() == null) {
+            log.error("❌ [VALIDATE-ACQUEREUR] Banque acquéreuse manquante pour la transaction: {}", transaction.getId());
+            throw new IllegalStateException("Banque acquéreuse manquante pour la transaction");
+        }
+
+        if (utilisateur.getInstitution() == null) {
+            log.error("❌ [VALIDATE-ACQUEREUR] Institution manquante pour l'utilisateur: {}", utilisateur.getId());
+            throw new IllegalStateException("Institution manquante pour l'utilisateur");
+        }
+
+        // Vérification spécifique banque acquéreuse
+        Long banqueAcquereuseId = transaction.getBanqueAcquereuse().getId();
+        Long institutionUtilisateurId = utilisateur.getInstitution().getId();
+
+        log.info("🔍 [VALIDATE-ACQUEREUR] Vérification IDs - BanqueAcquereuse: {}, InstitutionUtilisateur: {}",
+                banqueAcquereuseId, institutionUtilisateurId);
+
+        if (!banqueAcquereuseId.equals(institutionUtilisateurId)) {
+            log.error("❌ [VALIDATE-ACQUEREUR] Institution non autorisée - Attendue: {}, Actuelle: {}",
+                    banqueAcquereuseId, institutionUtilisateurId);
+            throw new IllegalArgumentException(String.format(
+                    "Seule la banque acquéreuse (ID: %d) peut effectuer cette action. Votre institution: %d",
+                    banqueAcquereuseId, institutionUtilisateurId));
+        }
+
+        log.info("✅ [VALIDATE-ACQUEREUR] Validation réussie");
         return utilisateur;
     }
 
@@ -724,15 +871,38 @@ public class ChargebackWorkflowService {
                                              Utilisateur utilisateur) {
         log.info("🔄 [REPRESENTATION] Acceptation partielle - Montant: {}", request.getMontantAccepte());
 
-        // Mise à jour du montant contesté avec la différence
+        // Validation et mise à jour du montant contesté avec la différence
         if (request.getMontantAccepte() != null) {
-            BigDecimal montantRestant = litigeChargeback.getMontantConteste().subtract(request.getMontantAccepte());
-            litigeChargeback.setMontantConteste(montantRestant);
-        }
+            BigDecimal montantOriginal = litigeChargeback.getMontantConteste();
+            BigDecimal montantAccepte = request.getMontantAccepte();
 
-        // Progression vers représentation (en attente de décision émettrice)
-        litigeChargeback.progresserVersPhase("REPRESENTATION");
-        definirDeadlineRepresentation(litigeChargeback);
+            // Validation que le montant accepté ne dépasse pas le montant contesté
+            if (montantAccepte.compareTo(montantOriginal) > 0) {
+                log.error("❌ [REPRESENTATION] Montant accepté ({}) supérieur au montant contesté ({})",
+                        montantAccepte, montantOriginal);
+                throw new IllegalArgumentException("Le montant accepté ne peut pas être supérieur au montant contesté");
+            }
+
+            BigDecimal montantRestant = montantOriginal.subtract(montantAccepte);
+
+            // Validation que le montant restant est positif
+            if (montantRestant.compareTo(BigDecimal.ZERO) <= 0) {
+                log.info("✅ [REPRESENTATION] Acceptation partielle complète - Finalisation du chargeback");
+                // Si le montant restant est zéro ou négatif, finaliser directement
+                litigeChargeback.progresserVersPhase("FINALISE");
+                litigeChargeback.setPeutEtreEscalade(false);
+                // Ne pas modifier montantConteste pour éviter la contrainte
+            } else {
+                log.info("🔄 [REPRESENTATION] Montant restant à traiter: {}", montantRestant);
+                litigeChargeback.setMontantConteste(montantRestant);
+                litigeChargeback.progresserVersPhase("REPRESENTATION");
+                definirDeadlineRepresentation(litigeChargeback);
+            }
+        } else {
+            // Si pas de montant accepté spécifié, progression normale
+            litigeChargeback.progresserVersPhase("REPRESENTATION");
+            definirDeadlineRepresentation(litigeChargeback);
+        }
 
         litigeChargebackRepository.save(litigeChargeback);
     }
@@ -1124,6 +1294,45 @@ public class ChargebackWorkflowService {
             log.error("❌ Erreur lors de l'annulation du chargeback pour le litige {}", litigeId, e);
             return false;
         }
+    }
+    // ====================================================================
+    // 🔍 MÉTHODE DEBUG POUR DIAGNOSTIC SÉPARATION ÉMETTEUR/ACQUÉREUR
+    // ====================================================================
+
+
+    public void debugChargebacksSeparation(Long institutionId) {
+        log.info("🔍 [DEBUG] ===== DIAGNOSTIC SÉPARATION CHARGEBACKS =====");
+        log.info("🔍 [DEBUG] Institution ID: {}", institutionId);
+
+        try {
+            // 1. Statistiques par rôle
+            List<Object[]> statsParRole = litigeChargebackRepository.countChargebacksByRole(institutionId);
+            log.info("📊 [DEBUG] Statistiques par rôle:");
+            for (Object[] stat : statsParRole) {
+                String role = (String) stat[0];
+                Long count = (Long) stat[1];
+                log.info("📊 [DEBUG]   - {}: {} chargebacks", role, count);
+            }
+
+            // 2. Liste détaillée des chargebacks
+            List<LitigeChargebackDTO> chargebacks = getLitigesChargebackParInstitution(institutionId);
+            log.info("🔍 [DEBUG] Chargebacks détaillés ({})", chargebacks.size());
+
+            for (LitigeChargebackDTO cb : chargebacks) {
+                log.info("🔍 [DEBUG] Chargeback ID: {}", cb.getId());
+                log.info("🔍 [DEBUG]   - Transaction: {}", cb.getTransaction() != null ? cb.getTransaction().getReference() : "null");
+                log.info("🔍 [DEBUG]   - Banque émettrice ID: {}", cb.getTransaction() != null && cb.getTransaction().getBanqueEmettrice() != null ? cb.getTransaction().getBanqueEmettrice().getId() : "null");
+                log.info("🔍 [DEBUG]   - Banque acquéreuse ID: {}", cb.getTransaction() != null && cb.getTransaction().getBanqueAcquereuse() != null ? cb.getTransaction().getBanqueAcquereuse().getId() : "null");
+                log.info("🔍 [DEBUG]   - Phase: {}", cb.getPhaseActuelle());
+                log.info("🔍 [DEBUG]   - Montant: {}", cb.getMontantConteste());
+                log.info("🔍 [DEBUG] ---");
+            }
+
+        } catch (Exception e) {
+            log.error("❌ [DEBUG] Erreur lors du diagnostic", e);
+        }
+
+        log.info("🔍 [DEBUG] ===== FIN DIAGNOSTIC =====");
     }
 
 

@@ -348,4 +348,30 @@ public interface LitigeChargebackRepository extends JpaRepository<LitigeChargeba
      */
     @Query("SELECT lc.id FROM LitigeChargeback lc ORDER BY lc.id ASC")
     List<Long> findAllIds();
+
+    // ====================================================================
+    // 🔍 MÉTHODE DEBUG POUR SÉPARATION ÉMETTEUR/ACQUÉREUR
+    // ====================================================================
+
+    /**
+     * 🔍 DEBUG : Compter les chargebacks par rôle (émetteur/acquéreur)
+     */
+    @Query("SELECT " +
+            "CASE " +
+            "  WHEN l.transaction.banqueEmettrice.id = :institutionId THEN 'EMETTEUR' " +
+            "  WHEN l.transaction.banqueAcquereuse.id = :institutionId THEN 'ACQUEREUR' " +
+            "  ELSE 'AUTRE' " +
+            "END as role, " +
+            "COUNT(lc.id) as count " +
+            "FROM LitigeChargeback lc " +
+            "JOIN Litige l ON lc.litigeId = l.id " +
+            "WHERE l.transaction.banqueEmettrice.id = :institutionId " +
+            "   OR l.transaction.banqueAcquereuse.id = :institutionId " +
+            "GROUP BY " +
+            "CASE " +
+            "  WHEN l.transaction.banqueEmettrice.id = :institutionId THEN 'EMETTEUR' " +
+            "  WHEN l.transaction.banqueAcquereuse.id = :institutionId THEN 'ACQUEREUR' " +
+            "  ELSE 'AUTRE' " +
+            "END")
+    List<Object[]> countChargebacksByRole(@Param("institutionId") Long institutionId);
 }

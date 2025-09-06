@@ -19,6 +19,7 @@ import java.time.LocalDate;
                 name = "uk_litige_transaction_user"
         )
 )
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class Litige {
 
     @Id

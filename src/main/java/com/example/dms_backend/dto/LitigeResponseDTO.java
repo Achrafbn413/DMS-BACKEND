@@ -21,4 +21,6 @@ public class LitigeResponseDTO {
 
     // ✅ Nouveau champ ajouté
     private String institutionDeclarantNom;
+
+
 }

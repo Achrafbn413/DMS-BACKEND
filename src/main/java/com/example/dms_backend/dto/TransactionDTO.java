@@ -20,4 +20,6 @@ public class TransactionDTO {
 
     // ✅ Ajout du champ pour la banque déclarante (si litige)
     private String banqueDeclarante;
+
+
 }

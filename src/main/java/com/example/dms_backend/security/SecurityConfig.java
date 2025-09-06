@@ -32,19 +32,21 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // ✅ OPTIONS requests pour CORS
+                        // OPTIONS requests pour CORS
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                        // ✅ Endpoints publics (authentification, documentation)
+                        // Endpoints publics (authentification, documentation)
                         .requestMatchers("/api/auth/**", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/admin/institutions/public/**").permitAll()
                         .requestMatchers("/api/satim/upload").permitAll()
 
-                        // ✅ CORRECTION TEMPORAIRE : Tous les endpoints transactions en public
-                        .requestMatchers("/api/transactions/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/transactions/details/**").authenticated()
+                        // ENDPOINTS TRANSACTIONS CORRIGÉS
+                        .requestMatchers(HttpMethod.GET, "/api/transactions/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/transactions/**").authenticated()
+                        .requestMatchers(HttpMethod.PUT, "/api/transactions/**").authenticated()
+                        .requestMatchers(HttpMethod.DELETE, "/api/transactions/**").authenticated()
 
-                        // ✅ CORRECTION : Endpoints de litiges existants
+                        // CORRECTION : Endpoints de litiges existants
                         .requestMatchers(HttpMethod.GET, "/api/public/litiges").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/litiges/institution/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/public/litiges/emis/**").authenticated()
@@ -55,40 +57,75 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/public/litiges/flag").authenticated()
                         .requestMatchers(HttpMethod.PUT, "/api/public/litiges/*/mark-read").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/public/litiges/details/**").authenticated()
-                                // ✅ Chargeback : Initiation, Représentation, Second Presentment
-                        // ✅ CORRECTION: Chargeback endpoints simplifiés
-                        .requestMatchers("/api/public/chargebacks/**").authenticated()
 
-                                // ✅ AJOUT : Endpoints SATIM
+                        // ENDPOINTS CHARGEBACK CORRIGÉS - Ordre spécifique avant générique
+                        .requestMatchers(HttpMethod.POST, "/api/public/chargebacks/initiate").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/public/chargebacks/representation").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/public/chargebacks/second-presentment").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/public/chargebacks/arbitrage").authenticated()
+                        .requestMatchers(HttpMethod.PUT, "/api/public/chargebacks/*/decision").authenticated()
+                        .requestMatchers(HttpMethod.PUT, "/api/public/chargebacks/*/cancel").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/chargebacks/institution/*").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/chargebacks/stats/*").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/public/chargebacks/*/upload-justificatifs").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/chargebacks/*/justificatifs").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/chargebacks/*/historique").authenticated()
+
+                        // AJOUT : Endpoints SATIM
                         .requestMatchers(HttpMethod.GET, "/api/satim/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/satim/**").authenticated()
 
-                        // ✅ Administration
+                        // Administration
                         .requestMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
 
-
-                        // ✅ Tout le reste nécessite une authentification
+                        // Tout le reste nécessite une authentification
                         .anyRequest().authenticated()
-
                 )
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 
+
+
+
     @Bean
-
-
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        // ✅ CORRECTION: Ajout de patterns plus permissifs pour le développement
-        config.setAllowedOriginPatterns(List.of("http://localhost:4200", "http://127.0.0.1:4200"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
-        // ✅ CORRECTION: Headers étendus pour éviter les rejets CORS
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
-        config.setExposedHeaders(List.of("Authorization", "Content-Type"));
+
+        // ✅ ORIGINS CORRIGÉS pour développement et production
+        config.setAllowedOriginPatterns(List.of(
+                "http://localhost:4200",
+                "http://127.0.0.1:4200",
+                "http://localhost:*"
+        ));
+
+        // ✅ MÉTHODES HTTP complètes
+        config.setAllowedMethods(List.of(
+                "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"
+        ));
+
+        // ✅ HEADERS COMPLETS pour éviter les rejets CORS
+        config.setAllowedHeaders(List.of(
+                "Authorization",
+                "Content-Type",
+                "Accept",
+                "Origin",
+                "X-Requested-With",
+                "Access-Control-Request-Method",
+                "Access-Control-Request-Headers",
+                "X-Frame-Options"
+        ));
+
+        // ✅ HEADERS EXPOSÉS pour le client
+        config.setExposedHeaders(List.of(
+                "Authorization",
+                "Content-Type",
+                "X-Total-Count"
+        ));
+
         config.setAllowCredentials(true);
-        config.setMaxAge(3600L); // ✅ AJOUT: Cache preflight pour 1 heure
+        config.setMaxAge(86400L); // 24 heures pour réduire les preflight
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

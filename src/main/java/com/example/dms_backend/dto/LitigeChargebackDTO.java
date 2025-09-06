@@ -117,6 +117,105 @@ public class LitigeChargebackDTO {
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     @JsonProperty("dateTransaction")
     private LocalDateTime dateTransaction;
+    // === OBJET TRANSACTION COMPLET POUR COMPATIBILITÉ FRONTEND ===
+    @JsonProperty("transaction")
+    private TransactionMinimalDTO transaction;
+
+    // Classe interne pour représenter les données transaction nécessaires au frontend
+    public static class TransactionMinimalDTO {
+        @JsonProperty("id")
+        private Long id;
+
+        @JsonProperty("reference")
+        private String reference;
+
+        @JsonProperty("montant")
+        private BigDecimal montant;
+
+        @JsonProperty("dateTransaction")
+        private LocalDateTime dateTransaction;
+
+        @JsonProperty("banqueEmettrice")
+        private BanqueMinimalDTO banqueEmettrice;
+
+        @JsonProperty("banqueAcquereuse")
+        private BanqueMinimalDTO banqueAcquereuse;
+
+        // Constructeurs
+        public TransactionMinimalDTO() {}
+
+        public TransactionMinimalDTO(String reference, Long banqueEmettriceId, Long banqueAcquereuseId,
+                                     BigDecimal montant, LocalDateTime dateTransaction) {
+            this.reference = reference;
+            this.montant = montant;
+            this.dateTransaction = dateTransaction;
+
+            if (banqueEmettriceId != null) {
+                this.banqueEmettrice = new BanqueMinimalDTO(banqueEmettriceId);
+            }
+
+            if (banqueAcquereuseId != null) {
+                this.banqueAcquereuse = new BanqueMinimalDTO(banqueAcquereuseId);
+            }
+        }
+
+        // Getters et Setters
+        public Long getId() { return id; }
+        public void setId(Long id) { this.id = id; }
+
+        public String getReference() { return reference; }
+        public void setReference(String reference) { this.reference = reference; }
+
+        public BigDecimal getMontant() { return montant; }
+        public void setMontant(BigDecimal montant) { this.montant = montant; }
+
+        public LocalDateTime getDateTransaction() { return dateTransaction; }
+        public void setDateTransaction(LocalDateTime dateTransaction) { this.dateTransaction = dateTransaction; }
+
+        public BanqueMinimalDTO getBanqueEmettrice() { return banqueEmettrice; }
+        public void setBanqueEmettrice(BanqueMinimalDTO banqueEmettrice) { this.banqueEmettrice = banqueEmettrice; }
+
+        public BanqueMinimalDTO getBanqueAcquereuse() { return banqueAcquereuse; }
+        public void setBanqueAcquereuse(BanqueMinimalDTO banqueAcquereuse) { this.banqueAcquereuse = banqueAcquereuse; }
+    }
+    // Getter et Setter pour la transaction
+    public TransactionMinimalDTO getTransaction() {
+        return transaction;
+    }
+
+    public void setTransaction(TransactionMinimalDTO transaction) {
+        this.transaction = transaction;
+    }
+
+    // Classe interne pour représenter les banques
+    public static class BanqueMinimalDTO {
+        @JsonProperty("id")
+        private Long id;
+
+        @JsonProperty("nom")
+        private String nom;
+
+        // Constructeurs
+        public BanqueMinimalDTO() {}
+
+        public BanqueMinimalDTO(Long id) {
+            this.id = id;
+            // Mapping simple des noms selon les IDs
+            switch (id.intValue()) {
+                case 1: this.nom = "CIH BANK"; break;
+                case 2: this.nom = "ATTIJARIWAFA BANK"; break;
+                case 3: this.nom = "BMCE BANK"; break;
+                default: this.nom = "Banque #" + id; break;
+            }
+        }
+
+        // Getters et Setters
+        public Long getId() { return id; }
+        public void setId(Long id) { this.id = id; }
+
+        public String getNom() { return nom; }
+        public void setNom(String nom) { this.nom = nom; }
+    }
     // === GETTERS/SETTERS TRANSACTION ===
     public String getTransactionRef() {
         return transactionRef;
@@ -538,6 +637,15 @@ public class LitigeChargebackDTO {
         dto.setBanqueAcquereuse(banqueAcquereuse);
         dto.setMontantOriginal(montantOriginal);
         dto.setDateTransaction(dateTransaction);
+
+        // ✅ NOUVEAU : Création de l'objet transaction complet pour le frontend
+        dto.setTransaction(new TransactionMinimalDTO(
+                transactionRef,
+                banqueEmettrice,
+                banqueAcquereuse,
+                montantOriginal,
+                dateTransaction
+        ));
 
         return dto;
     }

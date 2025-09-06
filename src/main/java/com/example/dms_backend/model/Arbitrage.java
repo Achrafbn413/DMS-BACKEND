@@ -15,6 +15,8 @@ import java.util.Objects;
  * Entité représentant les arbitrages d'un litige
  * Table: ARBITRAGES
  */
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 @Entity
 @Table(name = "ARBITRAGES",
         indexes = {
@@ -25,6 +27,7 @@ import java.util.Objects;
                 @Index(name = "IDX_ARBITRAGES_DATE_DEMANDE", columnList = "DATE_DEMANDE"),
                 @Index(name = "IDX_ARBITRAGES_DATE_DECISION", columnList = "DATE_DECISION")
         })
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class Arbitrage {
 
     @Id
@@ -47,7 +50,6 @@ public class Arbitrage {
     @Column(name = "DATE_DECISION")
     private LocalDateTime dateDecision;
 
-    @Size(max = 30, message = "La décision ne peut pas dépasser 30 caractères")
     @Column(name = "DECISION", length = 30)
     @Enumerated(EnumType.STRING)
     private Decision decision;
@@ -60,7 +62,6 @@ public class Arbitrage {
     @Column(name = "COUT_ARBITRAGE", precision = 10, scale = 2)
     private BigDecimal coutArbitrage;
 
-    @Size(max = 20, message = "La répartition des frais ne peut pas dépasser 20 caractères")
     @Column(name = "REPARTITION_FRAIS", length = 20)
     @Enumerated(EnumType.STRING)
     private RepartitionFrais repartitionFrais;
@@ -68,7 +69,6 @@ public class Arbitrage {
     @Column(name = "ARBITRE_UTILISATEUR_ID")
     private Long arbitreUtilisateurId;
 
-    @Size(max = 20, message = "Le statut ne peut pas dépasser 20 caractères")
     @Column(name = "STATUT", nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
     private StatutArbitrage statut = StatutArbitrage.DEMANDE;
